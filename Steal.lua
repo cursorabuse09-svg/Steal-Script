@@ -8,6 +8,7 @@ local character = player.Character or player.CharacterAdded:Wait()
 local humanoid = character:WaitForChild("Humanoid")
 local rootPart = character:WaitForChild("HumanoidRootPart")
 local mouse = player:GetMouse()
+local camera = workspace.CurrentCamera
 
 local savedPosition = nil
 local marker = nil
@@ -17,6 +18,38 @@ local baseLockPosition = nil
 local returnPosition = nil
 local fastInteractEnabled = false
 local teleportReturnPos = nil
+local espEnabled = false
+local espLabels = {}
+local npcPositions = {}
+
+local ignoredNPCs = {
+    ["67"] = true,
+    ["41"] = true,
+    ["Ness"] = true,
+    ["Scene Femboy"] = true,
+    ["Cat Femboy"] = true,
+    ["Noob Femboy"] = true,
+    ["Bunny Femboy"] = true,
+    ["Femboy Developer"] = true,
+    ["Ruka"] = true,
+    ["Saika"] = true,
+    ["Haku"] = true,
+    ["Hideri"] = true,
+    ["Felix"] = true,
+    ["Chihiro Fujisaki"] = true,
+    ["Employed Femboy"] = true,
+    ["Empl*yed Femboy"] = true,
+    ["Roommate"] = true,
+    ["Casual Astolfo"] = true,
+    ["Gasper"] = true,
+    ["billytheguyNEW"] = true
+}
+
+local rarityColors = {
+    ["Divine"] = Color3.fromRGB(255, 107, 236),
+    ["Special"] = Color3.fromRGB(0, 255, 0),
+    ["Goldy"] = Color3.fromRGB(100, 150, 255)
+}
 
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "TeleportGui"
@@ -24,8 +57,8 @@ screenGui.ResetOnSpawn = false
 screenGui.Parent = game.CoreGui
 
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 320, 0, 445)
-mainFrame.Position = UDim2.new(0.5, -160, 0.5, -222)
+mainFrame.Size = UDim2.new(0, 320, 0, 500)
+mainFrame.Position = UDim2.new(0.5, -160, 0.5, -250)
 mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
 mainFrame.BorderSizePixel = 0
 mainFrame.Active = true
@@ -228,6 +261,125 @@ local function createMarker(position)
     end)
 end
 
+local function getNPCRarity(npcModel)
+    for _, obj in pairs(npcModel:GetDescendants()) do
+        if obj:IsA("StringValue") and obj.Name == "Rarity" then
+            return obj.Value
+        end
+    end
+    
+    if npcModel:GetAttribute("Rarity") then
+        return npcModel:GetAttribute("Rarity")
+    end
+    
+    local config = npcModel:FindFirstChild("Configuration") or npcModel:FindFirstChild("Config")
+    if config then
+        local rarity = config:FindFirstChild("Rarity")
+        if rarity and rarity:IsA("StringValue") then
+            return rarity.Value
+        end
+    end
+    
+    return nil
+end
+
+local function isNPCStationary(npcModel)
+    local humanoid = npcModel:FindFirstChild("Humanoid")
+    if humanoid then
+        local rootPart = npcModel:FindFirstChild("HumanoidRootPart") or npcModel:FindFirstChild("Torso")
+        if rootPart then
+            if not npcPositions[npcModel] then
+                npcPositions[npcModel] = rootPart.Position
+                return false
+            end
+            
+            local lastPos = npcPositions[npcModel]
+            local currentPos = rootPart.Position
+            local distance = (currentPos - lastPos).Magnitude
+            
+            npcPositions[npcModel] = currentPos
+            
+            return distance < 0.5
+        end
+    end
+    return false
+end
+
+local function createESP(npcModel)
+    if ignoredNPCs[npcModel.Name] then return end
+    if not npcModel:FindFirstChild("HumanoidRootPart") and not npcModel:FindFirstChild("Head") then return end
+    
+    local targetPart = npcModel:FindFirstChild("HumanoidRootPart") or npcModel:FindFirstChild("Head")
+    
+    local billboardGui = Instance.new("BillboardGui")
+    billboardGui.Name = "NPCEsp"
+    billboardGui.AlwaysOnTop = true
+    billboardGui.Size = UDim2.new(0, 120, 0, 40)
+    billboardGui.StudsOffset = Vector3.new(0, 2, 0)
+    billboardGui.Parent = targetPart
+    
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Size = UDim2.new(1, 0, 0.5, 0)
+    textLabel.BackgroundTransparency = 1
+    textLabel.Text = npcModel.Name
+    textLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    textLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    textLabel.TextStrokeTransparency = 0
+    textLabel.TextSize = 16
+    textLabel.Font = Enum.Font.GothamBold
+    textLabel.Parent = billboardGui
+    
+    local rarityLabel = Instance.new("TextLabel")
+    rarityLabel.Size = UDim2.new(1, 0, 0.5, 0)
+    rarityLabel.Position = UDim2.new(0, 0, 0.5, 0)
+    rarityLabel.BackgroundTransparency = 1
+    rarityLabel.Text = ""
+    rarityLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    rarityLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    rarityLabel.TextStrokeTransparency = 0
+    rarityLabel.TextSize = 14
+    rarityLabel.Font = Enum.Font.GothamBold
+    rarityLabel.Parent = billboardGui
+    
+    local rarity = getNPCRarity(npcModel)
+    if rarity and rarityColors[rarity] then
+        rarityLabel.Text = rarity
+        rarityLabel.TextColor3 = rarityColors[rarity]
+    end
+    
+    espLabels[npcModel] = {gui = billboardGui, rarityLabel = rarityLabel, part = targetPart}
+end
+
+local function removeESP(npcModel)
+    if espLabels[npcModel] then
+        if espLabels[npcModel].gui then
+            espLabels[npcModel].gui:Destroy()
+        end
+        espLabels[npcModel] = nil
+    end
+end
+
+local function scanForNPCs()
+    if not espEnabled then return end
+    
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj:FindFirstChild("Humanoid") and not Players:GetPlayerFromCharacter(obj) then
+            if not ignoredNPCs[obj.Name] and isNPCStationary(obj) and not espLabels[obj] then
+                createESP(obj)
+            elseif not isNPCStationary(obj) and espLabels[obj] then
+                removeESP(obj)
+            end
+        end
+    end
+end
+
+local function clearAllESP()
+    for npcModel, _ in pairs(espLabels) do
+        removeESP(npcModel)
+    end
+    npcPositions = {}
+end
+
 local function fastInteract()
     if not fastInteractEnabled or not rootPart then return end
     
@@ -299,10 +451,20 @@ createToggle("INSTANT INTERACT", UDim2.new(0, 20, 0, 390), function(state)
     end
 end)
 
+createToggle("NPC ESP", UDim2.new(0, 20, 0, 445), function(state)
+    espEnabled = state
+    if state then
+        scanForNPCs()
+    else
+        clearAllESP()
+    end
+end)
+
 closeButton.MouseButton1Click:Connect(function()
     if marker then
         marker:Destroy()
     end
+    clearAllESP()
     screenGui:Destroy()
 end)
 
@@ -313,6 +475,15 @@ RunService.Stepped:Connect(function()
                 part.CanCollide = false
             end
         end
+    end
+end)
+
+spawn(function()
+    while true do
+        if espEnabled then
+            scanForNPCs()
+        end
+        wait(1)
     end
 end)
 
