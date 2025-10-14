@@ -13,6 +13,10 @@ local savedPosition = nil
 local marker = nil
 local noclipEnabled = false
 local clickTpEnabled = false
+local baseLockPosition = nil
+local returnPosition = nil
+local fastInteractEnabled = false
+local teleportReturnPos = nil
 
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "TeleportGui"
@@ -20,8 +24,8 @@ screenGui.ResetOnSpawn = false
 screenGui.Parent = game.CoreGui
 
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 320, 0, 280)
-mainFrame.Position = UDim2.new(0.5, -160, 0.5, -140)
+mainFrame.Size = UDim2.new(0, 320, 0, 445)
+mainFrame.Position = UDim2.new(0.5, -160, 0.5, -222)
 mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
 mainFrame.BorderSizePixel = 0
 mainFrame.Active = true
@@ -74,7 +78,7 @@ local closeCorner = Instance.new("UICorner")
 closeCorner.CornerRadius = UDim.new(0, 8)
 closeCorner.Parent = closeButton
 
-local function createButton(text, position, callback)
+local function createButton(text, position, callback, rightClickCallback)
     local button = Instance.new("TextButton")
     button.Size = UDim2.new(0, 280, 0, 45)
     button.Position = position
@@ -105,6 +109,10 @@ local function createButton(text, position, callback)
     end)
     
     button.MouseButton1Click:Connect(callback)
+    
+    if rightClickCallback then
+        button.MouseButton2Click:Connect(rightClickCallback)
+    end
     
     return button
 end
@@ -220,6 +228,19 @@ local function createMarker(position)
     end)
 end
 
+local function fastInteract()
+    if not fastInteractEnabled or not rootPart then return end
+    
+    for _, v in pairs(game:GetDescendants()) do
+        if v:IsA("ProximityPrompt") then
+            pcall(function()
+                v.HoldDuration = 0
+                v.RequiresLineOfSight = false
+            end)
+        end
+    end
+end
+
 createButton("SAVE POSITION", UDim2.new(0, 20, 0, 60), function()
     if character and rootPart then
         savedPosition = rootPart.CFrame
@@ -227,18 +248,55 @@ createButton("SAVE POSITION", UDim2.new(0, 20, 0, 60), function()
     end
 end)
 
-createButton("TELEPORT", UDim2.new(0, 20, 0, 115), function()
-    if savedPosition and character and rootPart then
-        rootPart.CFrame = savedPosition
+createButton("TELEPORT", UDim2.new(0, 20, 0, 115), 
+    function()
+        if savedPosition and character and rootPart then
+            rootPart.CFrame = savedPosition
+        end
+    end,
+    function()
+        if savedPosition and character and rootPart then
+            teleportReturnPos = rootPart.CFrame
+            rootPart.CFrame = savedPosition
+            wait(0.5)
+            if teleportReturnPos then
+                rootPart.CFrame = teleportReturnPos
+                teleportReturnPos = nil
+            end
+        end
+    end
+)
+
+createButton("SAVE BASE LOCK", UDim2.new(0, 20, 0, 170), function()
+    if character and rootPart then
+        baseLockPosition = rootPart.CFrame
     end
 end)
 
-createToggle("NOCLIP", UDim2.new(0, 20, 0, 170), function(state)
+createButton("TELEPORT TO BASE", UDim2.new(0, 20, 0, 225), function()
+    if baseLockPosition and character and rootPart then
+        returnPosition = rootPart.CFrame
+        rootPart.CFrame = baseLockPosition
+        wait(0.1)
+        if returnPosition then
+            rootPart.CFrame = returnPosition
+        end
+    end
+end)
+
+createToggle("NOCLIP", UDim2.new(0, 20, 0, 280), function(state)
     noclipEnabled = state
 end)
 
-createToggle("CLICK TP (CTRL + LMB)", UDim2.new(0, 20, 0, 225), function(state)
+createToggle("CLICK TP (CTRL + LMB)", UDim2.new(0, 20, 0, 335), function(state)
     clickTpEnabled = state
+end)
+
+createToggle("INSTANT INTERACT", UDim2.new(0, 20, 0, 390), function(state)
+    fastInteractEnabled = state
+    if state then
+        fastInteract()
+    end
 end)
 
 closeButton.MouseButton1Click:Connect(function()
@@ -279,6 +337,19 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
             end
         elseif input.KeyCode == Enum.KeyCode.H then
             mainFrame.Visible = not mainFrame.Visible
+        elseif input.KeyCode == Enum.KeyCode.B then
+            if baseLockPosition and character and rootPart then
+                returnPosition = rootPart.CFrame
+                rootPart.CFrame = baseLockPosition
+                wait(0.1)
+                if returnPosition then
+                    rootPart.CFrame = returnPosition
+                end
+            end
+        elseif input.KeyCode == Enum.KeyCode.E then
+            if fastInteractEnabled then
+                fastInteract()
+            end
         end
     end
 end)
