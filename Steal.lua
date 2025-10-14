@@ -32,6 +32,7 @@ local ignoredNPCs = {
     ["Bunny Femboy"] = true,
     ["Femboy Developer"] = true,
     ["Ruka"] = true,
+    ["Venti"] = true,
     ["Saika"] = true,
     ["Haku"] = true,
     ["Hideri"] = true,
