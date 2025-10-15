@@ -10,17 +10,29 @@ local rootPart = character:WaitForChild("HumanoidRootPart")
 local mouse = player:GetMouse()
 local camera = workspace.CurrentCamera
 
-local savedPosition = nil
-local marker = nil
+local playerSpawnPosition = nil
 local noclipEnabled = false
 local clickTpEnabled = false
-local baseLockPosition = nil
+local lockPart = nil
 local returnPosition = nil
 local fastInteractEnabled = false
 local teleportReturnPos = nil
 local espEnabled = false
 local espLabels = {}
 local npcPositions = {}
+local proximityPrompts = {}
+local trackedNPCs = {}
+local grabTeleportEnabled = false
+local grabPosition = nil
+
+local noclipExcludeList = {
+    ["upperflooring"] = true,
+    ["Part"] = true,
+    ["RiverThings"] = true,
+    ["Layer4"] = true,
+    ["Ground"] = true,
+    ["flooring"] = true
+}
 
 local ignoredNPCs = {
     ["67"] = true,
@@ -58,12 +70,13 @@ screenGui.ResetOnSpawn = false
 screenGui.Parent = game.CoreGui
 
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 320, 0, 500)
-mainFrame.Position = UDim2.new(0.5, -160, 0.5, -250)
+mainFrame.Size = UDim2.new(0, 320, 0, 445)
+mainFrame.Position = UDim2.new(0.5, -160, 0.5, -222.5)
 mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
 mainFrame.BorderSizePixel = 0
 mainFrame.Active = true
 mainFrame.Draggable = true
+mainFrame.ClipsDescendants = true
 mainFrame.Parent = screenGui
 
 local uiCorner = Instance.new("UICorner")
@@ -80,7 +93,7 @@ titleLabel.Size = UDim2.new(1, 0, 0, 45)
 titleLabel.Position = UDim2.new(0, 0, 0, 0)
 titleLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
 titleLabel.BorderSizePixel = 0
-titleLabel.Text = "TELEPORT HUB"
+titleLabel.Text = "Steal a Femboy"
 titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 titleLabel.TextSize = 22
 titleLabel.Font = Enum.Font.GothamBold
@@ -96,6 +109,21 @@ titleFix.Position = UDim2.new(0, 0, 1, -12)
 titleFix.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
 titleFix.BorderSizePixel = 0
 titleFix.Parent = titleLabel
+
+local minimizeButton = Instance.new("TextButton")
+minimizeButton.Size = UDim2.new(0, 30, 0, 30)
+minimizeButton.Position = UDim2.new(1, -76, 0, 7.5)
+minimizeButton.BackgroundColor3 = Color3.fromRGB(255, 180, 60)
+minimizeButton.BorderSizePixel = 0
+minimizeButton.Text = "_"
+minimizeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+minimizeButton.TextSize = 18
+minimizeButton.Font = Enum.Font.GothamBold
+minimizeButton.Parent = titleLabel
+
+local minimizeCorner = Instance.new("UICorner")
+minimizeCorner.CornerRadius = UDim.new(0, 8)
+minimizeCorner.Parent = minimizeButton
 
 local closeButton = Instance.new("TextButton")
 closeButton.Size = UDim2.new(0, 30, 0, 30)
@@ -222,45 +250,6 @@ local function createToggle(text, position, callback)
     return toggleFrame
 end
 
-local function createMarker(position)
-    if marker then
-        marker:Destroy()
-    end
-    
-    marker = Instance.new("Part")
-    marker.Name = "TeleportMarker"
-    marker.Size = Vector3.new(4, 8, 4)
-    marker.Position = position
-    marker.Anchored = true
-    marker.CanCollide = false
-    marker.Material = Enum.Material.Neon
-    marker.BrickColor = BrickColor.new("Cyan")
-    marker.Transparency = 0.3
-    marker.Parent = workspace
-    
-    local pointLight = Instance.new("PointLight")
-    pointLight.Brightness = 3
-    pointLight.Color = Color3.fromRGB(0, 255, 255)
-    pointLight.Range = 25
-    pointLight.Parent = marker
-    
-    local beam = Instance.new("Part")
-    beam.Size = Vector3.new(0.5, 100, 0.5)
-    beam.Position = position + Vector3.new(0, 50, 0)
-    beam.Anchored = true
-    beam.CanCollide = false
-    beam.Material = Enum.Material.Neon
-    beam.BrickColor = BrickColor.new("Cyan")
-    beam.Transparency = 0.5
-    beam.Parent = marker
-    
-    spawn(function()
-        while marker and marker.Parent do
-            marker.CFrame = marker.CFrame * CFrame.Angles(0, math.rad(4), 0)
-            wait(0.03)
-        end
-    end)
-end
 
 local function getNPCRarity(npcModel)
     for _, obj in pairs(npcModel:GetDescendants()) do
@@ -309,6 +298,7 @@ end
 local function createESP(npcModel)
     if ignoredNPCs[npcModel.Name] then return end
     if not npcModel:FindFirstChild("HumanoidRootPart") and not npcModel:FindFirstChild("Head") then return end
+    if espLabels[npcModel] then return end
     
     local targetPart = npcModel:FindFirstChild("HumanoidRootPart") or npcModel:FindFirstChild("Head")
     
@@ -360,57 +350,192 @@ local function removeESP(npcModel)
     end
 end
 
-local function scanForNPCs()
-    if not espEnabled then return end
+local function checkNPC(npcModel)
+    if ignoredNPCs[npcModel.Name] then return end
+    if not npcModel:FindFirstChild("Humanoid") then return end
+    if Players:GetPlayerFromCharacter(npcModel) then return end
     
-    for _, obj in pairs(workspace:GetDescendants()) do
-        if obj:IsA("Model") and obj:FindFirstChild("Humanoid") and not Players:GetPlayerFromCharacter(obj) then
-            if not ignoredNPCs[obj.Name] and isNPCStationary(obj) and not espLabels[obj] then
-                createESP(obj)
-            elseif not isNPCStationary(obj) and espLabels[obj] then
-                removeESP(obj)
+    if not trackedNPCs[npcModel] then
+        trackedNPCs[npcModel] = {checked = false, stationary = false}
+        isNPCStationary(npcModel)
+        task.wait(2)
+        if npcModel.Parent then
+            local stationary = isNPCStationary(npcModel)
+            trackedNPCs[npcModel] = {checked = true, stationary = stationary}
+            if stationary and espEnabled then
+                createESP(npcModel)
             end
         end
     end
+end
+
+local function setupNPCTracking()
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj:FindFirstChild("Humanoid") then
+            task.spawn(checkNPC, obj)
+        end
+    end
+    
+    workspace.DescendantAdded:Connect(function(obj)
+        if obj:IsA("Model") then
+            task.wait(0.1)
+            if obj:FindFirstChild("Humanoid") then
+                task.spawn(checkNPC, obj)
+            end
+        elseif obj.Name == "Humanoid" and obj.Parent:IsA("Model") then
+            task.spawn(checkNPC, obj.Parent)
+        end
+    end)
+    
+    workspace.DescendantRemoving:Connect(function(obj)
+        if obj:IsA("Model") then
+            if espLabels[obj] then
+                removeESP(obj)
+            end
+            if trackedNPCs[obj] then
+                trackedNPCs[obj] = nil
+            end
+            if npcPositions[obj] then
+                npcPositions[obj] = nil
+            end
+        end
+    end)
 end
 
 local function clearAllESP()
     for npcModel, _ in pairs(espLabels) do
         removeESP(npcModel)
     end
-    npcPositions = {}
 end
 
-local function fastInteract()
-    if not fastInteractEnabled or not rootPart then return end
-    
+local function modifyProximityPrompt(prompt)
+    if not fastInteractEnabled then return end
+    pcall(function()
+        prompt.HoldDuration = 0
+        prompt.RequiresLineOfSight = false
+    end)
+end
+
+local function setupPromptGrabTeleport(prompt)
+    prompt.Triggered:Connect(function()
+        if not grabTeleportEnabled then return end
+        if not playerSpawnPosition then return end
+        if not character or not rootPart then return end
+        
+        local shouldSkip = false
+        
+        if prompt.ObjectText then
+            local lowerText = string.lower(prompt.ObjectText)
+            if string.sub(lowerText, 1, 4) == "sell" or string.sub(lowerText, 1, 8) == "purchase" then
+                shouldSkip = true
+            end
+        end
+        
+        if not shouldSkip and prompt.ActionText then
+            local lowerText = string.lower(prompt.ActionText)
+            if string.sub(lowerText, 1, 4) == "sell" or string.sub(lowerText, 1, 8) == "purchase" then
+                shouldSkip = true
+            end
+        end
+        
+        if not shouldSkip and prompt.Name then
+            local lowerText = string.lower(prompt.Name)
+            if string.sub(lowerText, 1, 4) == "sell" or string.sub(lowerText, 1, 8) == "purchase" then
+                shouldSkip = true
+            end
+        end
+        
+        if shouldSkip then return end
+        
+        grabPosition = rootPart.CFrame
+        task.wait(0.5)
+        rootPart.CFrame = playerSpawnPosition
+        task.wait(0.15)
+        if grabPosition and rootPart then
+            rootPart.CFrame = grabPosition
+            grabPosition = nil
+        end
+    end)
+end
+
+local function setupProximityPrompts()
     for _, v in pairs(game:GetDescendants()) do
         if v:IsA("ProximityPrompt") then
-            pcall(function()
-                v.HoldDuration = 0
-                v.RequiresLineOfSight = false
-            end)
+            proximityPrompts[v] = true
+            if fastInteractEnabled then
+                modifyProximityPrompt(v)
+            end
+            setupPromptGrabTeleport(v)
+        end
+    end
+    
+    game.DescendantAdded:Connect(function(v)
+        if v:IsA("ProximityPrompt") then
+            proximityPrompts[v] = true
+            if fastInteractEnabled then
+                modifyProximityPrompt(v)
+            end
+            setupPromptGrabTeleport(v)
+        end
+    end)
+    
+    game.DescendantRemoving:Connect(function(v)
+        if v:IsA("ProximityPrompt") then
+            proximityPrompts[v] = nil
+        end
+    end)
+end
+
+local function applyFastInteract()
+    for prompt, _ in pairs(proximityPrompts) do
+        if prompt and prompt.Parent then
+            modifyProximityPrompt(prompt)
         end
     end
 end
 
-createButton("SAVE POSITION", UDim2.new(0, 20, 0, 60), function()
-    if character and rootPart then
-        savedPosition = rootPart.CFrame
-        createMarker(rootPart.Position)
-    end
-end)
+local noclipConnection = nil
 
-createButton("TELEPORT", UDim2.new(0, 20, 0, 115), 
+local function enableNoclip()
+    if noclipConnection then
+        noclipConnection:Disconnect()
+    end
+    
+    noclipConnection = RunService.Stepped:Connect(function()
+        if character then
+            for _, part in pairs(character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = false
+                end
+            end
+        end
+    end)
+end
+
+local function disableNoclip()
+    if noclipConnection then
+        noclipConnection:Disconnect()
+        noclipConnection = nil
+    end
+    if character then
+        for _, part in pairs(character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = true
+            end
+        end
+    end
+end
+
+createButton("TELEPORT TO BASE", UDim2.new(0, 20, 0, 60), 
     function()
-        if savedPosition and character and rootPart then
-            rootPart.CFrame = savedPosition
+        if playerSpawnPosition and character and rootPart then
+            rootPart.CFrame = playerSpawnPosition
         end
     end,
     function()
-        if savedPosition and character and rootPart then
+        if playerSpawnPosition and character and rootPart then
             teleportReturnPos = rootPart.CFrame
-            rootPart.CFrame = savedPosition
+            rootPart.CFrame = playerSpawnPosition
             wait(0.5)
             if teleportReturnPos then
                 rootPart.CFrame = teleportReturnPos
@@ -420,16 +545,10 @@ createButton("TELEPORT", UDim2.new(0, 20, 0, 115),
     end
 )
 
-createButton("SAVE BASE LOCK", UDim2.new(0, 20, 0, 170), function()
-    if character and rootPart then
-        baseLockPosition = rootPart.CFrame
-    end
-end)
-
-createButton("TELEPORT TO BASE", UDim2.new(0, 20, 0, 225), function()
-    if baseLockPosition and character and rootPart then
+createButton("LOCK BASE", UDim2.new(0, 20, 0, 115), function()
+    if lockPart and character and rootPart then
         returnPosition = rootPart.CFrame
-        rootPart.CFrame = baseLockPosition
+        rootPart.CFrame = CFrame.new(lockPart.Position + Vector3.new(0, 5, 0))
         wait(0.1)
         if returnPosition then
             rootPart.CFrame = returnPosition
@@ -437,54 +556,86 @@ createButton("TELEPORT TO BASE", UDim2.new(0, 20, 0, 225), function()
     end
 end)
 
-createToggle("NOCLIP", UDim2.new(0, 20, 0, 280), function(state)
+createToggle("NOCLIP", UDim2.new(0, 20, 0, 170), function(state)
     noclipEnabled = state
-end)
-
-createToggle("CLICK TP (CTRL + LMB)", UDim2.new(0, 20, 0, 335), function(state)
-    clickTpEnabled = state
-end)
-
-createToggle("INSTANT INTERACT", UDim2.new(0, 20, 0, 390), function(state)
-    fastInteractEnabled = state
     if state then
-        fastInteract()
+        enableNoclip()
+    else
+        disableNoclip()
     end
 end)
 
-createToggle("NPC ESP", UDim2.new(0, 20, 0, 445), function(state)
+createToggle("CLICK TP (CTRL + LMB)", UDim2.new(0, 20, 0, 225), function(state)
+    clickTpEnabled = state
+end)
+
+createToggle("INSTANT INTERACT", UDim2.new(0, 20, 0, 280), function(state)
+    fastInteractEnabled = state
+    if state then
+        applyFastInteract()
+    end
+end)
+
+createToggle("NPC ESP", UDim2.new(0, 20, 0, 335), function(state)
     espEnabled = state
     if state then
-        scanForNPCs()
+        for npcModel, data in pairs(trackedNPCs) do
+            if npcModel and npcModel.Parent and data.checked and data.stationary then
+                createESP(npcModel)
+            end
+        end
     else
         clearAllESP()
     end
 end)
 
-closeButton.MouseButton1Click:Connect(function()
-    if marker then
-        marker:Destroy()
+createToggle("GRAB TELEPORT", UDim2.new(0, 20, 0, 390), function(state)
+    grabTeleportEnabled = state
+end)
+
+
+minimizeButton.MouseButton1Click:Connect(function()
+    local isMinimized = mainFrame.Size.Y.Offset <= 45
+    if isMinimized then
+        mainFrame:TweenSize(UDim2.new(0, 320, 0, 445), Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.3, true)
+        minimizeButton.Text = "_"
+    else
+        mainFrame:TweenSize(UDim2.new(0, 320, 0, 45), Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.3, true)
+        minimizeButton.Text = "+"
     end
+end)
+
+closeButton.MouseButton1Click:Connect(function()
+    noclipEnabled = false
+    disableNoclip()
+    clickTpEnabled = false
+    fastInteractEnabled = false
+    grabTeleportEnabled = false
+    espEnabled = false
     clearAllESP()
+    
     screenGui:Destroy()
 end)
 
-RunService.Stepped:Connect(function()
-    if noclipEnabled and character then
-        for _, part in pairs(character:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = false
+RunService.Heartbeat:Connect(function()
+    if noclipEnabled and rootPart and character then
+        local rayParams = RaycastParams.new()
+        rayParams.FilterDescendantsInstances = {character}
+        rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+        
+        local raycastResult = workspace:Raycast(rootPart.Position, Vector3.new(0, -10, 0), rayParams)
+        
+        if raycastResult and raycastResult.Instance then
+            if noclipExcludeList[raycastResult.Instance.Name] then
+                raycastResult.Instance.CanCollide = true
             end
         end
-    end
-end)
-
-spawn(function()
-    while true do
-        if espEnabled then
-            scanForNPCs()
+        
+        for _, obj in pairs(workspace:GetPartBoundsInRadius(rootPart.Position, 15)) do
+            if noclipExcludeList[obj.Name] then
+                obj.CanCollide = true
+            end
         end
-        wait(1)
     end
 end)
 
@@ -496,38 +647,81 @@ mouse.Button1Down:Connect(function()
     end
 end)
 
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if not gameProcessed then
-        if input.KeyCode == Enum.KeyCode.F then
-            if savedPosition and character and rootPart then
-                rootPart.CFrame = savedPosition
-            end
-        elseif input.KeyCode == Enum.KeyCode.G then
-            if character and rootPart then
-                savedPosition = rootPart.CFrame
-                createMarker(rootPart.Position)
-            end
-        elseif input.KeyCode == Enum.KeyCode.H then
-            mainFrame.Visible = not mainFrame.Visible
-        elseif input.KeyCode == Enum.KeyCode.B then
-            if baseLockPosition and character and rootPart then
-                returnPosition = rootPart.CFrame
-                rootPart.CFrame = baseLockPosition
-                wait(0.1)
-                if returnPosition then
-                    rootPart.CFrame = returnPosition
-                end
-            end
-        elseif input.KeyCode == Enum.KeyCode.E then
-            if fastInteractEnabled then
-                fastInteract()
-            end
-        end
-    end
-end)
 
 player.CharacterAdded:Connect(function(newCharacter)
     character = newCharacter
     humanoid = character:WaitForChild("Humanoid")
     rootPart = character:WaitForChild("HumanoidRootPart")
 end)
+
+local function getSpawnLocation()
+    local ownerPart = nil
+    
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj.Name == "Owner" and obj:IsA("BasePart") then
+            local foundName = false
+            for _, child in pairs(obj:GetDescendants()) do
+                if child:IsA("TextLabel") then
+                    if child.Text == player.DisplayName then
+                        ownerPart = obj
+                        foundName = true
+                        break
+                    end
+                end
+            end
+            if foundName then break end
+        end
+    end
+    
+    if ownerPart then
+        local ownerPosition = ownerPart.Position
+        
+        local closestLock = nil
+        local closestLockDistance = math.huge
+        
+        for _, obj in pairs(workspace:GetDescendants()) do
+            if obj.Name == "Lock" and obj:IsA("BasePart") then
+                local distance = (obj.Position - ownerPosition).Magnitude
+                if distance < closestLockDistance then
+                    closestLockDistance = distance
+                    closestLock = obj
+                end
+            end
+        end
+        
+        if closestLock then
+            lockPart = closestLock
+        end
+        
+        local closestHitbox = nil
+        local closestHitboxDistance = math.huge
+        
+        for _, obj in pairs(workspace:GetDescendants()) do
+            if obj.Name == "CollectZoneHitbox" and obj:IsA("BasePart") then
+                local distance = (obj.Position - ownerPosition).Magnitude
+                if distance < closestHitboxDistance then
+                    closestHitboxDistance = distance
+                    closestHitbox = obj
+                end
+            end
+        end
+        
+        if closestHitbox then
+            playerSpawnPosition = CFrame.new(closestHitbox.Position + Vector3.new(0, 3, 0))
+        end
+    end
+    
+    if not playerSpawnPosition then
+        for _, obj in pairs(workspace:GetDescendants()) do
+            if obj:IsA("SpawnLocation") then
+                playerSpawnPosition = CFrame.new(obj.Position + Vector3.new(0, 3, 0))
+                break
+            end
+        end
+    end
+end
+
+getSpawnLocation()
+
+setupProximityPrompts()
+setupNPCTracking()
